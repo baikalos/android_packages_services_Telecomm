@@ -123,6 +123,7 @@ import com.android.internal.util.IndentingPrintWriter;
 import com.android.server.telecom.bluetooth.BluetoothDeviceManager;
 import com.android.server.telecom.bluetooth.BluetoothRouteManager;
 import com.android.server.telecom.bluetooth.BluetoothStateReceiver;
+import com.android.server.telecom.callfiltering.BaikalCallFilter;
 import com.android.server.telecom.callfiltering.BlockCheckerAdapter;
 import com.android.server.telecom.callfiltering.BlockCheckerFilter;
 import com.android.server.telecom.callfiltering.BlockedNumbersAdapter;
@@ -1029,10 +1030,17 @@ public class CallsManager extends Call.ListenerBase
                 getDefaultCallScreeningApp(userHandle);
         AppLabelProxy appLabelProxy = (packageName, user) -> AppLabelProxy.Util.getAppLabel(
                 mContext, user, packageName, mFeatureFlags);
+
+        String baikalPackageName = SystemProperties.get("persist.baikal.call_screening","");
+        Boolean dontUseDefaultDialer = SystemProperties.getBoolean("persist.baikal.call_screening_no_dd",false);
+
         ParcelableCallUtils.Converter converter = new ParcelableCallUtils.Converter();
 
         IncomingCallFilterGraph graph = mIncomingCallFilterGraphProvider.createGraph(incomingCall,
                 this::onCallFilteringComplete, mContext, mTimeoutsAdapter, mFeatureFlags, mLock);
+
+        BaikalCallFilter baikalCallFilter = new BaikalCallFilter(mContext,incomingCall,mCallerInfoLookupHelper);
+
         DirectToVoicemailFilter voicemailFilter = new DirectToVoicemailFilter(incomingCall,
                 mCallerInfoLookupHelper);
         BlockCheckerFilter blockCheckerFilter = new BlockCheckerFilter(mContext, incomingCall,
@@ -1042,27 +1050,63 @@ public class CallsManager extends Call.ListenerBase
                 new CallScreeningServiceFilter(incomingCall, carrierPackageName,
                         CallScreeningServiceFilter.PACKAGE_TYPE_CARRIER, mContext, this,
                         appLabelProxy, converter);
-        CallScreeningServiceFilter callScreeningServiceFilter;
+        CallScreeningServiceFilter callScreeningServiceFilterUserChosen = null;
         if ((userChosenPackageName != null)
-                && (!userChosenPackageName.equals(defaultDialerPackageName))) {
-            callScreeningServiceFilter = new CallScreeningServiceFilter(incomingCall,
+                && (!userChosenPackageName.equals(defaultDialerPackageName) || dontUseDefaultDialer)) {
+            Log.i(this, "setUpCallFilterGraph: callScreeningServiceFilterUserChosen=" + userChosenPackageName);
+            callScreeningServiceFilterUserChosen = new CallScreeningServiceFilter(incomingCall,
                     userChosenPackageName, CallScreeningServiceFilter.PACKAGE_TYPE_USER_CHOSEN,
                     mContext, this, appLabelProxy, converter);
-        } else {
-            callScreeningServiceFilter = new CallScreeningServiceFilter(incomingCall,
+        }
+        
+        CallScreeningServiceFilter callScreeningServiceFilterDefaultDialer = null;
+        if( !dontUseDefaultDialer && defaultDialerPackageName != null ) {
+            Log.i(this, "setUpCallFilterGraph: callScreeningServiceFilterDefaultDialer=" + defaultDialerPackageName);
+             callScreeningServiceFilterDefaultDialer = new CallScreeningServiceFilter(incomingCall,
                     defaultDialerPackageName,
                     CallScreeningServiceFilter.PACKAGE_TYPE_DEFAULT_DIALER,
                     mContext, this, appLabelProxy, converter);
         }
+
+        CallScreeningServiceFilter callScreeningServiceFilterBaikal = null;
+        if( baikalPackageName != null && !"".equals(baikalPackageName) && 
+            !baikalPackageName.equals(userChosenPackageName) && !baikalPackageName.equals(defaultDialerPackageName) ) {
+            Log.i(this, "setUpCallFilterGraph: callScreeningServiceFilterBaikal=" + baikalPackageName);
+            callScreeningServiceFilterBaikal = new CallScreeningServiceFilter(incomingCall,
+                    baikalPackageName, CallScreeningServiceFilter.PACKAGE_TYPE_USER_CHOSEN,
+                    mContext, this, appLabelProxy, converter);
+        }
+
         graph.addFilter(voicemailFilter);
         graph.addFilter(dndCallFilter);
         graph.addFilter(blockCheckerFilter);
         graph.addFilter(carrierCallScreeningServiceFilter);
-        graph.addFilter(callScreeningServiceFilter);
+
+        if( callScreeningServiceFilterUserChosen != null ) graph.addFilter(callScreeningServiceFilterUserChosen);
+        if( callScreeningServiceFilterDefaultDialer != null ) graph.addFilter(callScreeningServiceFilterDefaultDialer);
+        if( callScreeningServiceFilterBaikal != null ) graph.addFilter(callScreeningServiceFilterBaikal);
+
+        IncomingCallFilterGraph.addEdge(baikalCallFilter, carrierCallScreeningServiceFilter);
         IncomingCallFilterGraph.addEdge(voicemailFilter, carrierCallScreeningServiceFilter);
         IncomingCallFilterGraph.addEdge(blockCheckerFilter, carrierCallScreeningServiceFilter);
-        IncomingCallFilterGraph.addEdge(carrierCallScreeningServiceFilter,
-                callScreeningServiceFilter);
+
+        CallScreeningServiceFilter prev = carrierCallScreeningServiceFilter;
+        if( callScreeningServiceFilterUserChosen != null ) {
+            IncomingCallFilterGraph.addEdge(callScreeningServiceFilterUserChosen,
+                carrierCallScreeningServiceFilter);
+            prev = callScreeningServiceFilterUserChosen;
+        }
+        if( callScreeningServiceFilterDefaultDialer != null ) {
+            IncomingCallFilterGraph.addEdge(callScreeningServiceFilterDefaultDialer,
+                carrierCallScreeningServiceFilter);
+            prev = callScreeningServiceFilterDefaultDialer;
+        }
+        if( callScreeningServiceFilterBaikal != null ) {
+            IncomingCallFilterGraph.addEdge(callScreeningServiceFilterBaikal,
+                carrierCallScreeningServiceFilter);
+            prev = callScreeningServiceFilterBaikal;
+        }
+
         mGraphHandlerThreads.add(graph.getHandlerThread());
         return graph;
     }
