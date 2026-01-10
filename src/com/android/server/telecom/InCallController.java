@@ -66,6 +66,7 @@ import android.util.ArraySet;
 import android.util.Pair;
 import android.util.IndentingPrintWriter;
 
+
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telecom.IInCallService;
 import com.android.server.telecom.SystemStateHelper.SystemStateListener;
@@ -1219,6 +1220,34 @@ public class InCallController extends CallsManagerListenerBase implements
                 }
             } finally {
                 Log.endSession();
+            }
+        }
+    };
+
+    private final BroadcastReceiver mUserAddedReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (Intent.ACTION_USER_ADDED.equals(intent.getAction())) {
+                // restrictPhoneCallOps();
+            }
+        }
+    };
+
+    private int mForceUi = 0;
+    private BroadcastReceiver mSwitchIncallUiReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            try {
+                if ("com.android.internal.baikalos.Actions.ACTION_SWITCH_INCALLUI".equals(intent.getAction())) {
+                    if( shouldUseCarModeUI() ) {
+                        mForceUi = 1;
+                    } else {
+                        mForceUi = 2;
+                    }
+                    updateCarModeForConnections();
+
+                } 
+            } finally {
             }
         }
     };
@@ -2377,6 +2406,7 @@ public class InCallController extends CallsManagerListenerBase implements
 
         CarSwappingInCallServiceConnection inCallServiceConnection =
                 mInCallServiceConnections.get(userFromCall);
+
         if (inCallServiceConnection == null) {
             InCallServiceConnection dialerInCall = null;
             InCallServiceInfo defaultDialerComponentInfo = getDefaultDialerComponent(userFromCall);
@@ -2424,6 +2454,8 @@ public class InCallController extends CallsManagerListenerBase implements
                 inCallServiceConnection = existing;
             }
         }
+
+        mForceUi = 0;
 
         inCallServiceConnection.chooseInitialInCallService(shouldUseCarModeUI());
 
@@ -2728,6 +2760,8 @@ public class InCallController extends CallsManagerListenerBase implements
     }
 
     private boolean shouldUseCarModeUI() {
+        if( mForceUi == 1 ) return false;
+        if( mForceUi == 2 ) return true;
         return mCarModeTracker.isInCarMode();
     }
 
