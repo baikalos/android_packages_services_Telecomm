@@ -68,6 +68,8 @@ import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.util.Pair;
 
+import com.android.internal.baikalos.BaikalActions;
+
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telecom.IInCallService;
 import com.android.internal.util.ArrayUtils;
@@ -1188,11 +1190,32 @@ public class InCallController extends CallsManagerListenerBase implements
         }
     };
 
+
+
     private final BroadcastReceiver mUserAddedReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (Intent.ACTION_USER_ADDED.equals(intent.getAction())) {
                 restrictPhoneCallOps();
+            }
+        }
+    };
+
+    private int mForceUi = 0;
+    private BroadcastReceiver mSwitchIncallUiReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            try {
+                if (BaikalActions.ACTION_SWITCH_INCALLUI.equals(intent.getAction())) {
+                    if( shouldUseCarModeUI() ) {
+                        mForceUi = 1;
+                    } else {
+                        mForceUi = 2;
+                    }
+                    updateCarModeForConnections();
+
+                } 
+            } finally {
             }
         }
     };
@@ -2295,8 +2318,11 @@ public class InCallController extends CallsManagerListenerBase implements
                     new CarSwappingInCallServiceConnection(systemInCall, carModeInCall));
         }
 
+        mForceUi = 0;
         CarSwappingInCallServiceConnection inCallServiceConnection =
                 mInCallServiceConnections.get(userFromCall);
+
+
         inCallServiceConnection.chooseInitialInCallService(shouldUseCarModeUI());
 
         final boolean isHeadlessDevice = mContext.getResources().getBoolean(R.bool.headless_dialer);
@@ -2635,6 +2661,8 @@ public class InCallController extends CallsManagerListenerBase implements
     }
 
     private boolean shouldUseCarModeUI() {
+        if( mForceUi == 1 ) return false;
+        if( mForceUi == 2 ) return true;
         return mCarModeTracker.isInCarMode();
     }
 
